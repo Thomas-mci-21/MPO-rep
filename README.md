@@ -30,6 +30,7 @@ In this work, we introduce the **Meta Plan Optimization (MPO)** framework, desig
 
 ## 🔥 News
 
+- [2025/08/20] 🔥🔥🔥 Our work has been accepted to **EMNLP 2025 Findings**! 
 - [2025/03/05] 🔥🔥🔥 MPO-optimized meta planner released at 🤗 HuggingFace! 
     - Llama-3.1-70B-Instruct, enhanced with the MPO-optimized meta planner ([ALFWorld-MPO](https://huggingface.co/xwm/ALFWorld-MPO) and [SciWorld-MPO](https://huggingface.co/xwm/SciWorld-MPO)), achieved an average accuracy of 83.1 on ALFWorld and SciWorld, setting a new state-of-the-art (SOTA) performance.
     - Llama-3.1-8B-Instruct + MPO achieved an average performance of 53.6, outperforming GPT-4o-mini by a significant margin with a 30.1% improvement.
