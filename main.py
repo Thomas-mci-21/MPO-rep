@@ -191,14 +191,30 @@ def main(args: argparse.Namespace):
         # calculate metrics
         reward_list = []
         success_list = []
+        
+        # Check if this was a ScienceWorld experiment
+        is_sciworld = exp_config.get("env_config", {}).get("env_class") == "SciWorldEnv"
+
         for state in state_list:
             if state.reward is not None:
                 reward_list.append(state.reward)
-            success_list.append(state.success)
+            
+            if is_sciworld:
+                # For ScienceWorld, apply the fix from the ReflAct paper.
+                # A task is successful only if the final progress reward is >= 0.7.
+                is_successful = state.reward is not None and state.reward >= 0.7
+                success_list.append(is_successful)
+            else:
+                # For other environments like ALFWorld, use the default success flag.
+                success_list.append(state.success)
 
+        # AR (Average Reward) - The average of all progress scores
         if len(reward_list) != 0:
-            logger.info(f"Average reward: {sum(reward_list)/len(success_list):.4f}")
-        logger.info(f"Success rate: {sum(success_list)/len(success_list):.4f}")
+            logger.info(f"Average reward (AR): {sum(reward_list)/len(reward_list):.4f}")
+        
+        # SR (Success Rate) - The percentage of tasks meeting the success criteria
+        if len(success_list) != 0:
+            logger.info(f"Success rate (SR): {sum(success_list)/len(success_list):.4f}")
 
 
 if __name__ == "__main__":
