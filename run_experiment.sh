@@ -1,6 +1,6 @@
 # Task configuration
 TASK_TYPE="alfworld" # alfworld, sciworld
-TEST_MODEL="Llama-3.1-8B-Instruct" 
+TEST_MODEL="gpt-4o-ca" 
 METAPLAN_TYPE="mpo" # none, sft, rft, mpo
 INCORPORATION_TYPE="query" # query, observation, thought
 MODEL_PATH="/mnt/weimin/models" # the path to the model
@@ -32,8 +32,8 @@ if [[ $TEST_MODEL != *"gpt"* ]]; then
     api_key="EMPTY"
     echo "Start the model $TEST_MODEL on localhost:$start_port"
 else
-    api_base="**************************" # TODO: replace with your own api base
-    api_key="**************************" # TODO: replace with your own api key
+    api_base="https://api.chatanywhere.tech/v1" # TODO: replace with your own api base
+    api_key="sk-iqbz8eE88kzff6lzhvzM49k34JF7pS0jKeDHqFx16FncY4An" # TODO: replace with your own api key
 fi
 
 
@@ -41,9 +41,9 @@ fi
 echo "Start running experiments: $TASK_TYPE $METAPLAN_TYPE $INCORPORATION_TYPE"
 echo "Evaluation model: $TEST_MODEL"
 if [[ $METAPLAN_TYPE == "none" ]]; then
-    python main.py --exp_config $TASK_TYPE --agent_config agent --model_name ${MODEL_PATH}/${TEST_MODEL} --split $SPLIT --metaplan_type $METAPLAN_TYPE  --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
+    python main.py --exp_config $TASK_TYPE --agent_config agent --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE  --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
 else
-    python main.py --exp_config $TASK_TYPE --agent_config agent --model_name ${MODEL_PATH}/${TEST_MODEL} --split $SPLIT --metaplan_type $METAPLAN_TYPE --metaplan_path data/$TASK_TYPE/metaplan/metaplan_${SPLIT}_${METAPLAN_TYPE}.jsonl --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
+    python main.py --exp_config $TASK_TYPE --agent_config agent --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE --metaplan_path data/$TASK_TYPE/metaplan/metaplan_${SPLIT}_${METAPLAN_TYPE}.jsonl --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
 fi
 
 # Kill all background processes
