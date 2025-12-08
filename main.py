@@ -97,7 +97,7 @@ def main(args: argparse.Namespace):
             output_path = os.path.join("seen", agent_config['config']['model_name'].split('/')[-1], exp_name, args.metaplan_type)
     pathlib.Path(output_path).mkdir(parents=True, exist_ok=True)
 
-    file_handler = logging.FileHandler(os.path.join(output_path, "log.txt"), mode='w')
+    file_handler = logging.FileHandler(os.path.join(output_path, "log.txt"), mode='a')
     logging.basicConfig(
         format="%(message)s",
         handlers=[logging.StreamHandler(), file_handler],
