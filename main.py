@@ -22,6 +22,9 @@ def interactive_loop(
     agent: agents.BaseAgent,
     env_config: Dict[str, Any],
 ) -> State:
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+
     logger.info(f"Loading environment: {env_config['env_class']}")
     env: envs.BaseEnv = getattr(envs, env_config["env_class"])(task, **env_config)
     env.args = args
@@ -37,9 +40,17 @@ def interactive_loop(
             agent.set_workflow(f"This workflow maybe helpful to complete the task:\n{task.workflow}\n")
         try:
             if args.incorporation_type == "thought" and task.workflow:
-                llm_output = agent.call_with_workflow(state.history)
+                response = agent.call_with_workflow(state.history)
             else:
-                llm_output: str = agent(state.history)
+                response = agent(state.history)
+
+            llm_output = response["content"]
+            usage = response.get("usage")
+            if usage:
+                total_prompt_tokens += usage.prompt_tokens
+                total_completion_tokens += usage.completion_tokens
+                logger.info(f"\n{Fore.CYAN}Tokens this turn: Prompt={usage.prompt_tokens}, Completion={usage.completion_tokens}{Fore.RESET}")
+            
             logger.info(
                 f"\n{Fore.GREEN}{llm_output}{Fore.RESET}\n"
             )
@@ -69,6 +80,11 @@ def interactive_loop(
         logger.info(
             f"Task finished in {state.steps} steps. Success: {state.success}"
         )
+
+    logger.info(f"\n{Fore.CYAN}--- Token Usage Summary ---")
+    logger.info(f"Total Prompt Tokens:     {total_prompt_tokens}")
+    logger.info(f"Total Completion Tokens: {total_completion_tokens}")
+    logger.info(f"Grand Total:             {total_prompt_tokens + total_completion_tokens}{Fore.RESET}")
 
     return state
 
@@ -171,7 +187,7 @@ def main(args: argparse.Namespace):
         pbar = tqdm(total=n_todo_tasks)
         for i, task in enumerate(all_tasks):
             # Only test 10 tasks in debug mode
-            if args.debug and i == 5:
+            if args.debug and i == 1:
                 break
 
             # skip done tasks
