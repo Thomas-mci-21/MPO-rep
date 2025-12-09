@@ -1,4 +1,5 @@
 # Task configuration
+AGENT_TYPE="agent" # agent (ReAct), zip_act
 TASK_TYPE="alfworld" # alfworld, sciworld
 TEST_MODEL="gpt-4o-ca" 
 METAPLAN_TYPE="mpo" # none, sft, rft, mpo
@@ -41,9 +42,9 @@ fi
 echo "Start running experiments: $TASK_TYPE $METAPLAN_TYPE $INCORPORATION_TYPE"
 echo "Evaluation model: $TEST_MODEL"
 if [[ $METAPLAN_TYPE == "none" ]]; then
-    python main.py --exp_config $TASK_TYPE --agent_config agent --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE  --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
+    python main.py --exp_config $TASK_TYPE --agent_config $AGENT_TYPE --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE  --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
 else
-    python main.py --exp_config $TASK_TYPE --agent_config agent --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE --metaplan_path data/$TASK_TYPE/metaplan/metaplan_${SPLIT}_${METAPLAN_TYPE}.jsonl --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
+    python main.py --exp_config $TASK_TYPE --agent_config $AGENT_TYPE --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE --metaplan_path data/$TASK_TYPE/metaplan/metaplan_${SPLIT}_${METAPLAN_TYPE}.jsonl --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
 fi
 
 # Kill all background processes
