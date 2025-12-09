@@ -1,4 +1,3 @@
-
 import logging
 import os
 import re
@@ -25,19 +24,27 @@ class ZipActAgent(BaseAgent):
         super().__init__(config)
         
         # --- LLM Client Initialization ---
-        zip_act_config = config.get("zip_act_llm_config", {})
-        self.zip_act_client = OpenAI(
-            base_url=zip_act_config.get("api_base", config.get("api_base")),
-            api_key=zip_act_config.get("api_key", config.get("api_key", os.environ.get("OPENAI_API_KEY"))),
-        )
-        self.zip_act_model_name = zip_act_config.get("model_name", config.get("model_name"))
+        # Prioritize values from the main agent config (which come from run_experiment.sh)
+        # over sub-configs in zip_act.json
+        main_model_name = config.get("model_name")
+        main_api_base = config.get("api_base")
+        main_api_key = config.get("api_key", os.environ.get("OPENAI_API_KEY"))
 
-        state_updater_config = config.get("state_updater_llm_config", {})
-        self.state_updater_client = OpenAI(
-            base_url=state_updater_config.get("api_base", config.get("api_base")),
-            api_key=state_updater_config.get("api_key", config.get("api_key", os.environ.get("OPENAI_API_KEY"))),
+
+        zip_act_llm_config = config.get("zip_act_llm_config", {})
+        self.zip_act_client = OpenAI(
+            base_url=main_api_base or zip_act_llm_config.get("api_base"),
+            api_key=main_api_key or zip_act_llm_config.get("api_key"),
         )
-        self.state_updater_model_name = state_updater_config.get("model_name", config.get("model_name"))
+        self.zip_act_model_name = main_model_name or zip_act_llm_config.get("model_name")
+
+        state_updater_llm_config = config.get("state_updater_llm_config", {})
+        self.state_updater_client = OpenAI(
+            base_url=main_api_base or state_updater_llm_config.get("api_base"),
+            api_key=main_api_key or state_updater_llm_config.get("api_key"),
+        )
+        self.state_updater_model_name = main_model_name or state_updater_llm_config.get("model_name")
+
 
         # --- Memory and ICL Initialization ---
         self.state_list: List[str] = []
@@ -54,30 +61,24 @@ class ZipActAgent(BaseAgent):
             with open(config["state_updater_icl_path"], 'r') as f:
                 self.state_updater_examples = json.load(f)
 
-    # @backoff.on_exception(
-    #     backoff.fibo,
-    #     (openai.APIError, openai.Timeout, openai.RateLimitError, openai.APIConnectionError),
-    # )
+    @backoff.on_exception(
+        backoff.fibo,
+        (openai.APIError, openai.Timeout, openai.RateLimitError, openai.APIConnectionError),
+    )
     def _call_llm(self, client: OpenAI, model_name: str, messages: List[Dict[str, str]]) -> Tuple[str, Any]:
         """A generic, decorated method to call an LLM."""
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                max_tokens=self.config.get("max_completion_tokens", 512),
-                temperature=self.config.get("temperature", 0),
-                stop=self.stop_words,
-            )
-            content = response.choices[0].message.content
-            usage = response.usage
-            return content, usage
-        except Exception as e:
-            # --- CRITICAL DIAGNOSTIC LOG ---
-            logger.error(f"!!! CAUGHT UNKNOWN EXCEPTION IN _call_llm !!!")
-            logger.error(f"Exception Type: {type(e)}")
-            logger.error(f"Exception Details: {e}")
-            # --- END DIAGNOSTIC ---
-            raise e # Re-raise the exception to be caught by the outer loop
+        # The diagnostic try-except has been removed. Backoff handles retries,
+        # and AuthenticationError will now be caught by outer try-excepts or terminate as expected.
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            max_tokens=self.config.get("max_completion_tokens", 512),
+            temperature=self.config.get("temperature", 0),
+            stop=self.stop_words,
+        )
+        content = response.choices[0].message.content
+        usage = response.usage
+        return content, usage
 
     def _construct_state_updater_prompt(self, last_action: str, new_observation: str) -> List[Dict[str, str]]:
         """Constructs the prompt for the StateUpdater LLM, including few-shot examples."""
@@ -105,8 +106,8 @@ OUTPUT FORMAT:
         
         messages = [system_message]
         for example in self.state_updater_examples:
-            old_state = "\n".join(f"- {s}" for s in example["old_state_list"])
-            old_subgoals = "\n".join(f"- {g}" for g in example["old_subgoal_list"])
+            old_state = "\n".join(f"- {s}" for s in example["old_state_list"]) if example["old_state_list"] else "None"
+            old_subgoals = "\n".join(f"- {g}" for g in example["old_subgoal_list"]) if example["old_subgoal_list"] else "None"
             user_prompt = f"""PREVIOUS MEMORY:
 <Current State>
 {old_state}
@@ -127,8 +128,8 @@ CONTEXT:
 TASK: Based on the context, provide the updated memory."""
             messages.append({"role": "user", "content": user_prompt})
 
-            new_state = "\n".join(f"- {s}" for s in example["expected_new_state_list"])
-            new_subgoals = "\n".join(f"- {g}" for g in example["expected_new_subgoal_list"])
+            new_state = "\n".join(f"- {s}" for s in example["expected_new_state_list"]) if example["expected_new_state_list"] else "None"
+            new_subgoals = "\n".join(f"- {g}" for g in example["expected_new_subgoal_list"]) if example["expected_new_subgoal_list"] else "None"
             assistant_response = f"""<New State>
 {new_state}
 </New State>
@@ -191,8 +192,8 @@ ACTION: [The single, specific action to execute next.]"""
         
         messages = [system_message]
         for example in self.zip_act_examples:
-            state = "\n".join(f"- {s}" for s in example["state_list"])
-            subgoals = "\n".join(f"- {g}" for g in example["subgoal_list"])
+            state = "\n".join(f"- {s}" for s in example["state_list"]) if example["state_list"] else "None"
+            subgoals = "\n".join(f"- {g}" for g in example["subgoal_list"]) if example["subgoal_list"] else "None"
             user_prompt = f"""Current State:
 {state}
 
@@ -238,20 +239,34 @@ Latest Observation:
 
     def __call__(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Executes the ZipAct + StateUpdater loop."""
-        logger.info(f"{Fore.YELLOW}--- Turn Start ---{Fore.RESET}")
+        logger.info(f"{Fore.YELLOW}--- Turn Start ---
+{Fore.RESET}")
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         
         current_observation = messages[-1]['content']
         
         if self.is_first_turn:
             logger.info("First turn: Initializing memory from task description.")
-            goal_match = re.search(r"Your task is to:\s*(.*)", current_observation)
+            # Ensure the initial observation is clean and just the task goal
+            goal_description_raw = current_observation.split("Your task is to:")[-1].strip()
+            # Remove workflow part if it somehow got included (though env is supposed to prevent it now)
+            goal_description = goal_description_raw.split("This workflow may be helpful")[0].strip()
+
+            # Attempt to parse a more structured goal
+            goal_match = re.search(r"heat some (\w+) and put it in (\w+)\", goal_description)
             if goal_match:
-                goal = goal_match.group(1).strip()
-                self.subgoal_list.append(f"Complete the task: {goal}")
-            self.state_list.append("The initial state is described by the observation.")
+                item_to_heat = goal_match.group(1)
+                location_to_put = goal_match.group(2)
+                self.subgoal_list.append(f"Find and take {item_to_heat}.")
+                self.subgoal_list.append(f"Heat {item_to_heat}.")
+                self.subgoal_list.append(f"Put {item_to_heat} in {location_to_put}.")
+                self.state_list.append(f"Task: {goal_description}")
+            else:
+                self.subgoal_list.append(f"Complete the task: {goal_description}")
+            self.state_list.append("The initial state is described by the observation and subgoals.")
         else:
-            logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---{Fore.RESET}")
+            logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---
+{Fore.RESET}")
             try:
                 last_action = messages[-2]['content']
                 logger.debug(f"StateUpdater INPUT - Last Action: {last_action}")
@@ -272,10 +287,10 @@ Latest Observation:
             except (IndexError, KeyError) as e:
                 logger.error(f"Could not extract context for StateUpdater (is history correct?): {e}")
             except Exception as e:
-                # This will catch the re-raised exception from _call_llm
                 logger.error(f"StateUpdater LLM call failed. Details logged in _call_llm.")
 
-        logger.info(f"{Fore.CYAN}--- Running ZipAct (Decision) Phase ---{Fore.RESET}")
+        logger.info(f"{Fore.CYAN}--- Running ZipAct (Decision) Phase ---
+{Fore.RESET}")
         logger.debug(f"ZipAct INPUT - State: {self.state_list}")
         logger.debug(f"ZipAct INPUT - Subgoals: {self.subgoal_list}")
         logger.debug(f"ZipAct INPUT - Observation: {current_observation}")
@@ -297,7 +312,6 @@ Latest Observation:
             logger.info(f"{Fore.CYAN}ZipAct Tokens: {usage.prompt_tokens} (P) + {usage.completion_tokens} (C) = {usage.total_tokens} (T){Fore.RESET}")
 
         except Exception as e:
-            # This will catch the re-raised exception from _call_llm
             logger.error(f"ZipAct LLM call failed. Details logged in _call_llm.")
 
         self.is_first_turn = False
