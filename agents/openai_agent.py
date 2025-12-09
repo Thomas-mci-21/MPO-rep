@@ -37,6 +37,7 @@ class OpenAIAgent(BaseAgent):
             max_completion_tokens=self.config.get("max_completion_tokens", 512),
             temperature=self.config.get("temperature", 0),
             stop=self.stop_words,
+        )
         return {
             "content": response.choices[0].message.content,
             "usage": response.usage,
