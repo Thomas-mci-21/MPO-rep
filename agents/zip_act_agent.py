@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import json
 from typing import List, Dict, Any, Tuple
 
 import backoff
@@ -43,6 +44,17 @@ class ZipActAgent(BaseAgent):
         self.subgoal_list: List[str] = []
         self.is_first_turn = True
 
+        # --- ICL Example Loading ---
+        self.zip_act_examples = []
+        if config.get("zip_act_icl_path"):
+            with open(config["zip_act_icl_path"], 'r') as f:
+                self.zip_act_examples = json.load(f)
+
+        self.state_updater_examples = []
+        if config.get("state_updater_icl_path"):
+            with open(config["state_updater_icl_path"], 'r') as f:
+                self.state_updater_examples = json.load(f)
+
     @backoff.on_exception(
         backoff.fibo,
         (openai.APIError, openai.Timeout, openai.RateLimitError, openai.APIConnectionError),
@@ -61,13 +73,75 @@ class ZipActAgent(BaseAgent):
         return content, usage
 
     def _construct_state_updater_prompt(self, last_action: str, new_observation: str) -> List[Dict[str, str]]:
-        """Constructs the prompt for the StateUpdater LLM."""
+        """Constructs the prompt for the StateUpdater LLM, including few-shot examples."""
         
-        # Format current memory for the prompt
+        # --- Build Few-Shot Examples ---
+        messages = []
+        for example in self.state_updater_examples:
+            old_state = "\n".join(f"- {s}" for s in example["old_state_list"])
+            old_subgoals = "\n".join(f"- {g}" for g in example["old_subgoal_list"])
+            
+            # User part of the example
+            user_prompt = f"""You are a meticulous memory assistant for an agent. Your task is to update the agent's memory based on the last action and the new observation.
+
+RULES:
+1. Update the 'Current State' and 'Subgoals' based *only* on the evidence from 'Action Taken' and 'New Observation'.
+2. Edits should be minimal. Do not remove information unless the observation clearly invalidates it.
+3. Do not invent new entities or facts.
+4. If a subgoal is completed, remove it. A subgoal is completed only if the observation provides clear evidence.
+5. Output the complete, updated lists for 'New State' and 'New Subgoals', even if no changes were made.
+
+PREVIOUS MEMORY:
+<Current State>
+{old_state}
+</Current State>
+
+<Subgoals>
+{old_subgoals}
+</Subgoals>
+
+CONTEXT:
+<Action Taken>
+{example["last_action"]}
+</Action Taken>
+
+<New Observation>
+{example["new_observation"]}
+</New Observation>
+
+TASK:
+Based on the context, provide the updated memory.
+
+OUTPUT FORMAT:
+<New State>
+- [Updated state item 1]
+- [Updated state item 2]
+...
+</New State>
+<New Subgoals>
+- [Updated subgoal item 1]
+- [Updated subgoal item 2]
+...
+</New Subgoals>
+"""
+            messages.append({"role": "user", "content": user_prompt})
+
+            # Assistant part of the example
+            new_state = "\n".join(f"- {s}" for s in example["expected_new_state_list"])
+            new_subgoals = "\n".join(f"- {g}" for g in example["expected_new_subgoal_list"])
+            assistant_response = f"""<New State>
+{new_state}
+</New State>
+<New Subgoals>
+{new_subgoals}
+</New Subgoals>"""
+            messages.append({"role": "assistant", "content": assistant_response})
+
+        # --- Build Final Prompt for Current Turn ---
         formatted_state = "\n".join(f"- {s}" for s in self.state_list) if self.state_list else "None"
         formatted_subgoals = "\n".join(f"- {g}" for g in self.subgoal_list) if self.subgoal_list else "None"
 
-        prompt = f"""You are a meticulous memory assistant for an agent. Your task is to update the agent's memory based on the last action and the new observation.
+        final_user_prompt = f"""You are a meticulous memory assistant for an agent. Your task is to update the agent's memory based on the last action and the new observation.
 
 RULES:
 1. Update the 'Current State' and 'Subgoals' based *only* on the evidence from 'Action Taken' and 'New Observation'.
@@ -109,7 +183,9 @@ OUTPUT FORMAT:
 ...
 </New Subgoals>
 """
-        return [{"role": "user", "content": prompt}]
+        messages.append({"role": "user", "content": final_user_prompt})
+        
+        return messages
 
     def _parse_new_memory(self, llm_output: str) -> Tuple[List[str], List[str]]:
         """Parses the StateUpdater LLM's output into state and subgoal lists."""
@@ -137,12 +213,41 @@ OUTPUT FORMAT:
             return self.state_list, self.subgoal_list
 
     def _construct_zip_act_prompt(self, current_observation: str) -> List[Dict[str, str]]:
-        """Constructs the prompt for the ZipAct LLM."""
-        
+        """Constructs the prompt for the ZipAct LLM, including few-shot examples."""
+
+        # --- Build Few-Shot Examples ---
+        messages = []
+        for example in self.zip_act_examples:
+            state = "\n".join(f"- {s}" for s in example["state_list"])
+            subgoals = "\n".join(f"- {g}" for g in example["subgoal_list"])
+
+            # User part of the example
+            user_prompt = f"""You are a smart and efficient agent. Your goal is to complete the task described in the subgoals.
+
+Current State:
+{state}
+
+Subgoals:
+{subgoals}
+
+Latest Observation:
+{example["observation"]}
+
+Based on the state, subgoals, and observation, decide your next action. First, provide a brief thought process (a few sentences), then specify the exact action.
+
+OUTPUT FORMAT:
+THINK: [Your brief reasoning for the action.]
+ACTION: [The single, specific action to execute next.]
+"""
+            messages.append({"role": "user", "content": user_prompt})
+            # Assistant part of the example
+            messages.append({"role": "assistant", "content": example["expected_output"]})
+
+        # --- Build Final Prompt for Current Turn ---
         formatted_state = "\n".join(f"- {s}" for s in self.state_list) if self.state_list else "None"
         formatted_subgoals = "\n".join(f"- {g}" for g in self.subgoal_list) if self.subgoal_list else "None"
         
-        prompt = f"""You are a smart and efficient agent. Your goal is to complete the task described in the subgoals.
+        final_user_prompt = f"""You are a smart and efficient agent. Your goal is to complete the task described in the subgoals.
 
 Current State:
 {formatted_state}
@@ -159,7 +264,9 @@ OUTPUT FORMAT:
 THINK: [Your brief reasoning for the action.]
 ACTION: [The single, specific action to execute next.]
 """
-        return [{"role": "user", "content": prompt}]
+        messages.append({"role": "user", "content": final_user_prompt})
+
+        return messages
 
     def _parse_zip_act_response(self, llm_output: str) -> Tuple[str, str]:
         """Parses the ZipAct LLM's output into think and action."""

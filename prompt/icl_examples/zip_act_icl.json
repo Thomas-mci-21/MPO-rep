@@ -1,0 +1,14 @@
+[
+  {
+    "description": "Demonstrates how to decide the next action based on memory and observation.",
+    "state_list": [
+      "the agent is holding an apple",
+      "the fridge is open"
+    ],
+    "subgoal_list": [
+      "slice the apple"
+    ],
+    "observation": "You are holding an apple.",
+    "expected_output": "THINK: My current subgoal is to slice the apple. I am holding the apple now. To slice it, I need a knife. I should first find a knife, which is usually on a counter or in a drawer.\nACTION: go to counter 1"
+  }
+]

@@ -12,6 +12,8 @@
       "api_key": "YOUR_API_KEY"
     },
     "max_completion_tokens": 512,
-    "temperature": 0.0
+    "temperature": 0.0,
+    "zip_act_icl_path": "prompt/icl_examples/zip_act_icl.json",
+    "state_updater_icl_path": "prompt/icl_examples/state_updater_icl.json"
   }
 }

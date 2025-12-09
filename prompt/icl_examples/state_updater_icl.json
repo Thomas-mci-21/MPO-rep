@@ -1,0 +1,22 @@
+[
+  {
+    "description": "Demonstrates updating state after taking an object and completing a subgoal.",
+    "old_state_list": [
+      "an apple is in the fridge",
+      "the fridge is open"
+    ],
+    "old_subgoal_list": [
+      "take apple from fridge",
+      "slice the apple"
+    ],
+    "last_action": "take apple from fridge",
+    "new_observation": "You take the apple from the fridge.",
+    "expected_new_state_list": [
+      "the agent is holding an apple",
+      "the fridge is open"
+    ],
+    "expected_new_subgoal_list": [
+      "slice the apple"
+    ]
+  }
+]
