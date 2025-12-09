@@ -101,6 +101,17 @@ class AlfWorldEnv(BaseEnv):
     def reset(self) -> Tuple[str, State]:
         self.state = State()
         cur_task = self.task.observation
+
+        # If instruction is not loaded, we are using a non-ReAct agent (like ZipAct)
+        if not self.instruction:
+            observation = cur_task
+            self.state.history.append({
+                "role": "user",
+                "content": observation,
+            })
+            return observation, self.state
+
+        # Otherwise, proceed with the ReAct-style prompt construction
         if self.args.incorporation_type == "query":
             observation, messages = prompt_with_icl(
                 instruction=self.instruction, 

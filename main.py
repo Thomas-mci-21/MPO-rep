@@ -47,9 +47,9 @@ def interactive_loop(
             llm_output = response["content"]
             usage = response.get("usage")
             if usage:
-                total_prompt_tokens += usage.prompt_tokens
-                total_completion_tokens += usage.completion_tokens
-                logger.info(f"\n{Fore.CYAN}Tokens this turn: Prompt={usage.prompt_tokens}, Completion={usage.completion_tokens}{Fore.RESET}")
+                total_prompt_tokens += usage["prompt_tokens"]
+                total_completion_tokens += usage["completion_tokens"]
+                logger.info(f"\n{Fore.CYAN}Tokens this turn: Prompt={usage['prompt_tokens']}, Completion={usage['completion_tokens']}{Fore.RESET}")
             
             logger.info(
                 f"\n{Fore.GREEN}{llm_output}{Fore.RESET}\n"

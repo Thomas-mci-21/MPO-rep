@@ -5,8 +5,6 @@
     },
     "env_config": {
         "env_class": "AlfWorldEnv",
-        "instruction_path": "prompt/instructions/alfworld_inst.txt",
-        "icl_path": "prompt/icl_examples/alfworld_icl.json",
         "icl_format": "first",
         "max_steps": 30
     },
