@@ -1,7 +1,7 @@
 # Task configuration
-AGENT_TYPE="agent" # agent (ReAct), zip_act
+AGENT_TYPE="zip_act" # agent (ReAct), zip_act
 TASK_TYPE="alfworld" # alfworld, sciworld
-TEST_MODEL="gpt-4o-ca" 
+TEST_MODEL="gpt-4o-mini-ca" 
 METAPLAN_TYPE="mpo" # none, sft, rft, mpo
 INCORPORATION_TYPE="query" # query, observation, thought
 MODEL_PATH="/mnt/weimin/models" # the path to the model
@@ -42,9 +42,9 @@ fi
 echo "Start running experiments: $TASK_TYPE $METAPLAN_TYPE $INCORPORATION_TYPE"
 echo "Evaluation model: $TEST_MODEL"
 if [[ $METAPLAN_TYPE == "none" ]]; then
-    python main.py --exp_config $TASK_TYPE --agent_config $AGENT_TYPE --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE  --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
+    python main.py --exp_config $TASK_TYPE --agent_config $AGENT_TYPE --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE  --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key --debug
 else
-    python main.py --exp_config $TASK_TYPE --agent_config $AGENT_TYPE --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE --metaplan_path data/$TASK_TYPE/metaplan/metaplan_${SPLIT}_${METAPLAN_TYPE}.jsonl --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key
+    python main.py --exp_config $TASK_TYPE --agent_config $AGENT_TYPE --model_name $TEST_MODEL --split $SPLIT --metaplan_type $METAPLAN_TYPE --metaplan_path data/$TASK_TYPE/metaplan/metaplan_${SPLIT}_${METAPLAN_TYPE}.jsonl --incorporation_type $INCORPORATION_TYPE --api_base $api_base --api_key $api_key --debug
 fi
 
 # Kill all background processes
