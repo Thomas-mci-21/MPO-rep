@@ -2,7 +2,7 @@
 AGENT_TYPE="zip_act" # agent (ReAct), zip_act
 TASK_TYPE="alfworld" # alfworld, sciworld
 TEST_MODEL="gpt-4o-mini-ca" 
-METAPLAN_TYPE="mpo" # none, sft, rft, mpo
+METAPLAN_TYPE="none" # none, sft, rft, mpo
 INCORPORATION_TYPE="query" # query, observation, thought
 MODEL_PATH="/mnt/weimin/models" # the path to the model
 SPLIT="test" # test, dev
