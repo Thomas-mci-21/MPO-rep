@@ -1,0 +1,17 @@
+{
+  "agent_class": "ZipActAgent",
+  "config": {
+    "zip_act_llm_config": {
+      "model_name": "gpt-4o-mini-ca",
+      "api_base": "https://api.chatanywhere.tech/v1",
+      "api_key": "YOUR_API_KEY"
+    },
+    "state_updater_llm_config": {
+      "model_name": "gpt-4o-mini-ca",
+      "api_base": "https://api.chatanywhere.tech/v1",
+      "api_key": "YOUR_API_KEY"
+    },
+    "max_completion_tokens": 512,
+    "temperature": 0.0
+  }
+}
