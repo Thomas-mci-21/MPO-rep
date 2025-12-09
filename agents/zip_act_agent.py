@@ -1,3 +1,4 @@
+
 import logging
 import os
 import re
@@ -53,22 +54,30 @@ class ZipActAgent(BaseAgent):
             with open(config["state_updater_icl_path"], 'r') as f:
                 self.state_updater_examples = json.load(f)
 
-    @backoff.on_exception(
-        backoff.fibo,
-        (openai.APIError, openai.Timeout, openai.RateLimitError, openai.APIConnectionError),
-    )
+    # @backoff.on_exception(
+    #     backoff.fibo,
+    #     (openai.APIError, openai.Timeout, openai.RateLimitError, openai.APIConnectionError),
+    # )
     def _call_llm(self, client: OpenAI, model_name: str, messages: List[Dict[str, str]]) -> Tuple[str, Any]:
         """A generic, decorated method to call an LLM."""
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            max_tokens=self.config.get("max_completion_tokens", 512),
-            temperature=self.config.get("temperature", 0),
-            stop=self.stop_words,
-        )
-        content = response.choices[0].message.content
-        usage = response.usage
-        return content, usage
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                max_tokens=self.config.get("max_completion_tokens", 512),
+                temperature=self.config.get("temperature", 0),
+                stop=self.stop_words,
+            )
+            content = response.choices[0].message.content
+            usage = response.usage
+            return content, usage
+        except Exception as e:
+            # --- CRITICAL DIAGNOSTIC LOG ---
+            logger.error(f"!!! CAUGHT UNKNOWN EXCEPTION IN _call_llm !!!")
+            logger.error(f"Exception Type: {type(e)}")
+            logger.error(f"Exception Details: {e}")
+            # --- END DIAGNOSTIC ---
+            raise e # Re-raise the exception to be caught by the outer loop
 
     def _construct_state_updater_prompt(self, last_action: str, new_observation: str) -> List[Dict[str, str]]:
         """Constructs the prompt for the StateUpdater LLM, including few-shot examples."""
@@ -216,7 +225,7 @@ Latest Observation:
             action_match = re.search(r"ACTION:(.*)", llm_output, re.DOTALL)
 
             think = think_match.group(1).strip() if think_match else ""
-            action = action_match.match.group(1).strip() if action_match else llm_output
+            action = action_match.group(1).strip() if action_match else llm_output
 
             if not action:
                 logger.warning("Could not parse ACTION from ZipAct output. Using entire output as action.")
@@ -229,7 +238,8 @@ Latest Observation:
 
     def __call__(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Executes the ZipAct + StateUpdater loop."""
-        logger.info(f"{Fore.YELLOW}--- Turn Start ---{Fore.RESET}")
+        logger.info(f"{Fore.YELLOW}--- Turn Start ---
+{Fore.RESET}")
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         
         current_observation = messages[-1]['content']
@@ -242,7 +252,8 @@ Latest Observation:
                 self.subgoal_list.append(f"Complete the task: {goal}")
             self.state_list.append("The initial state is described by the observation.")
         else:
-            logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---{Fore.RESET}")
+            logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---
+{Fore.RESET}")
             try:
                 last_action = messages[-2]['content']
                 logger.debug(f"StateUpdater INPUT - Last Action: {last_action}")
@@ -263,21 +274,24 @@ Latest Observation:
             except (IndexError, KeyError) as e:
                 logger.error(f"Could not extract context for StateUpdater (is history correct?): {e}")
             except Exception as e:
-                logger.error(f"StateUpdater LLM call failed: {e}")
+                # This will catch the re-raised exception from _call_llm
+                logger.error(f"StateUpdater LLM call failed. Details logged in _call_llm.")
 
-        logger.info(f"{Fore.CYAN}--- Running ZipAct (Decision) Phase ---{Fore.RESET}")
+        logger.info(f"{Fore.CYAN}--- Running ZipAct (Decision) Phase ---
+{Fore.RESET}")
         logger.debug(f"ZipAct INPUT - State: {self.state_list}")
         logger.debug(f"ZipAct INPUT - Subgoals: {self.subgoal_list}")
         logger.debug(f"ZipAct INPUT - Observation: {current_observation}")
 
         zip_act_prompt = self._construct_zip_act_prompt(current_observation)
         
-        action = "look" # Fallback action
+        action = "Action: look" # FIX: Correctly formatted fallback action
         try:
             zip_act_response, usage = self._call_llm(self.zip_act_client, self.zip_act_model_name, zip_act_prompt)
             logger.debug(f"ZipAct RAW OUTPUT:\n{zip_act_response}")
             
-            think, action = self._parse_zip_act_response(zip_act_response)
+            think, parsed_action = self._parse_zip_act_response(zip_act_response)
+            action = f"Action: {parsed_action}" # Ensure the action is always formatted correctly
             logger.info(f"{Fore.GREEN}ZipAct THINK: {think}{Fore.RESET}")
             
             total_usage["prompt_tokens"] += usage.prompt_tokens
@@ -286,7 +300,8 @@ Latest Observation:
             logger.info(f"{Fore.CYAN}ZipAct Tokens: {usage.prompt_tokens} (P) + {usage.completion_tokens} (C) = {usage.total_tokens} (T){Fore.RESET}")
 
         except Exception as e:
-            logger.error(f"ZipAct LLM call failed: {e}")
+            # This will catch the re-raised exception from _call_llm
+            logger.error(f"ZipAct LLM call failed. Details logged in _call_llm.")
 
         self.is_first_turn = False
         
