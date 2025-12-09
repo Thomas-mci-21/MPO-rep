@@ -239,8 +239,7 @@ Latest Observation:
 
     def __call__(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """Executes the ZipAct + StateUpdater loop."""
-        logger.info(f"{Fore.YELLOW}--- Turn Start ---
-{Fore.RESET}")
+        logger.info(f"{Fore.YELLOW}--- Turn Start ---{Fore.RESET}")
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         
         current_observation = messages[-1]['content']
@@ -265,8 +264,7 @@ Latest Observation:
                 self.subgoal_list.append(f"Complete the task: {goal_description}")
             self.state_list.append("The initial state is described by the observation and subgoals.")
         else:
-            logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---
-{Fore.RESET}")
+            logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---{Fore.RESET}")
             try:
                 last_action = messages[-2]['content']
                 logger.debug(f"StateUpdater INPUT - Last Action: {last_action}")
@@ -289,8 +287,7 @@ Latest Observation:
             except Exception as e:
                 logger.error(f"StateUpdater LLM call failed. Details logged in _call_llm.")
 
-        logger.info(f"{Fore.CYAN}--- Running ZipAct (Decision) Phase ---
-{Fore.RESET}")
+        logger.info(f"{Fore.CYAN}--- Running ZipAct (Decision) Phase ---{Fore.RESET}")
         logger.debug(f"ZipAct INPUT - State: {self.state_list}")
         logger.debug(f"ZipAct INPUT - Subgoals: {self.subgoal_list}")
         logger.debug(f"ZipAct INPUT - Observation: {current_observation}")
