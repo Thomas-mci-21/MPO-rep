@@ -252,7 +252,7 @@ Latest Observation:
             goal_description = goal_description_raw.split("This workflow may be helpful")[0].strip()
 
             # Attempt to parse a more structured goal
-            goal_match = re.search(r"heat some (\w+) and put it in (\w+)\", goal_description)
+            goal_match = re.search(r"heat some (\w+) and put it in (\w+)", goal_description)
             if goal_match:
                 item_to_heat = goal_match.group(1)
                 location_to_put = goal_match.group(2)
