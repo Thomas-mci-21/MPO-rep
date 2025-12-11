@@ -85,6 +85,24 @@ class ZipActAgent(BaseAgent):
         usage = response.usage
         return content, usage
 
+    @backoff.on_exception(
+        backoff.fibo,
+        (openai.APIError, openai.Timeout, openai.RateLimitError, openai.APIConnectionError),
+    )
+    def _call_llm_json(self, client: OpenAI, model_name: str, messages: List[Dict[str, str]]) -> Tuple[str, Any]:
+        """A decorated method to call an LLM with JSON mode enabled."""
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            response_format={"type": "json_object"},
+            max_tokens=self.config.get("max_completion_tokens", 512),
+            temperature=self.config.get("temperature", 0),
+            stop=self.stop_words,
+        )
+        content = response.choices[0].message.content
+        usage = response.usage
+        return content, usage
+
     def _construct_state_updater_prompt(self, last_action: str, new_observation: str) -> List[Dict[str, str]]:
         """Constructs the prompt for the StateUpdater LLM, including few-shot examples."""
         system_message = {
@@ -96,17 +114,7 @@ RULES:
 2. Edits should be minimal. Do not remove information unless contradicted.
 3. Do not invent facts.
 4. Remove a subgoal only if there is clear evidence of its completion.
-5. Output the complete, updated lists, even if no changes were made.
-
-OUTPUT FORMAT:
-<New State>
-- [State item 1]
-...
-</New State>
-<New Subgoals>
-- [Subgoal item 1]
-...
-</New Subgoals>"""
+5. You MUST respond with a JSON object of the format: {"new_state": ["state item 1", ...], "new_subgoals": ["subgoal item 1", ...]}"""
         }
         
         messages = [system_message]
@@ -130,17 +138,13 @@ CONTEXT:
 {example["new_observation"]}
 </New Observation>
 
-TASK: Based on the context, provide the updated memory."""
+TASK: Based on the context, provide the updated memory as a JSON object."""
             messages.append({"role": "user", "content": user_prompt})
 
-            new_state = "\n".join(f"- {s}" for s in example["expected_new_state_list"]) if example["expected_new_state_list"] else "None"
-            new_subgoals = "\n".join(f"- {g}" for g in example["expected_new_subgoal_list"]) if example["expected_new_subgoal_list"] else "None"
-            assistant_response = f"""<New State>
-{new_state}
-</New State>
-<New Subgoals>
-{new_subgoals}
-</New Subgoals>"""
+            assistant_response = json.dumps({
+                "new_state": example["expected_new_state_list"],
+                "new_subgoals": example["expected_new_subgoal_list"]
+            })
             messages.append({"role": "assistant", "content": assistant_response})
 
         formatted_state = "\n".join(f"- {s}" for s in self.state_list) if self.state_list else "None"
@@ -162,26 +166,29 @@ CONTEXT:
 {new_observation}
 </New Observation>
 
-TASK: Based on the context, provide the updated memory."""
+TASK: Based on the context, provide the updated memory as a JSON object."""
         messages.append({"role": "user", "content": final_user_prompt})
         
         return messages
 
     def _parse_new_memory(self, llm_output: str) -> Tuple[List[str], List[str]]:
-        """Parses the StateUpdater LLM's output into state and subgoal lists."""
+        """Parses the StateUpdater LLM's JSON output into state and subgoal lists."""
         try:
-            state_match = re.search(r"<New State>(.*?)</New State>", llm_output, re.DOTALL)
-            states_str = state_match.group(1).strip() if state_match else ""
-            new_state_list = [line.strip().lstrip('- ') for line in states_str.split('\n') if line.strip() and line.strip().lower() != 'none']
+            data = json.loads(llm_output)
+            new_state_list = data.get("new_state", self.state_list)
+            new_subgoal_list = data.get("new_subgoals", self.subgoal_list)
 
-            subgoal_match = re.search(r"<New Subgoals>(.*?)</New Subgoals>", llm_output, re.DOTALL)
-            subgoals_str = subgoal_match.group(1).strip() if subgoal_match else ""
-            new_subgoal_list = [line.strip().lstrip('- ') for line in subgoals_str.split('\n') if line.strip() and line.strip().lower() != 'none']
-            
-            logger.info(f"{Fore.MAGENTA}StateUpdater parsed memory. New state items: {len(new_state_list)}, New subgoal items: {len(new_subgoal_list)}{Fore.RESET}")
+            if not isinstance(new_state_list, list) or not isinstance(new_subgoal_list, list):
+                logger.error(f"StateUpdater JSON output is malformed: 'new_state' or 'new_subgoals' is not a list.\nOutput was:\n{llm_output}")
+                return self.state_list, self.subgoal_list
+
+            logger.debug(f"StateUpdater parsed memory. New state items: {len(new_state_list)}, New subgoal items: {len(new_subgoal_list)}")
             return new_state_list, new_subgoal_list
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from StateUpdater output: {e}\nOutput was:\n{llm_output}")
+            return self.state_list, self.subgoal_list
         except Exception as e:
-            logger.error(f"Failed to parse StateUpdater output: {e}\nOutput was:\n{llm_output}")
+            logger.error(f"An unexpected error occurred while parsing StateUpdater output: {e}\nOutput was:\n{llm_output}")
             return self.state_list, self.subgoal_list
 
     def _construct_subgoal_planner_prompt(self, task_description: str) -> List[Dict[str, str]]:
@@ -194,13 +201,7 @@ RULES:
 1. Each subgoal should be clear, specific, and executable.
 2. Subgoals should be ordered logically to accomplish the task.
 3. Keep subgoals concise (one action per subgoal).
-
-OUTPUT FORMAT:
-<Subgoals>
-- [Subgoal 1]
-- [Subgoal 2]
-...
-</Subgoals>"""
+4. You MUST respond with a JSON object of the format: {"subgoals": ["subgoal 1", "subgoal 2", ...]}"""
         }
         
         messages = [system_message]
@@ -208,8 +209,8 @@ OUTPUT FORMAT:
             user_prompt = f"Task: {example['task']}"
             messages.append({"role": "user", "content": user_prompt})
             
-            subgoals_str = "\n".join(f"- {sg}" for sg in example["expected_subgoals"])
-            assistant_response = f"<Subgoals>\n{subgoals_str}\n</Subgoals>"
+            # Format the assistant's response as a JSON string
+            assistant_response = json.dumps({"subgoals": example["expected_subgoals"]})
             messages.append({"role": "assistant", "content": assistant_response})
 
         final_user_prompt = f"Task: {task_description}"
@@ -218,27 +219,30 @@ OUTPUT FORMAT:
         return messages
 
     def _parse_subgoal_planner_response(self, llm_output: str) -> List[str]:
-        """Parses the SubgoalPlanner LLM's output into a list of subgoals."""
+        """Parses the SubgoalPlanner LLM's JSON output into a list of subgoals."""
         try:
-            subgoal_match = re.search(r"<Subgoals>(.*?)</Subgoals>", llm_output, re.DOTALL)
-            subgoals_str = subgoal_match.group(1).strip() if subgoal_match else ""
-            subgoal_list = [line.strip().lstrip('- ') for line in subgoals_str.split('\n') if line.strip()]
-            
-            logger.info(f"{Fore.GREEN}SubgoalPlanner generated {len(subgoal_list)} subgoals.{Fore.RESET}")
+            data = json.loads(llm_output)
+            subgoal_list = data.get("subgoals", [])
+            if not isinstance(subgoal_list, list):
+                logger.error(f"SubgoalPlanner JSON output is malformed: 'subgoals' is not a list.\nOutput was:\n{llm_output}")
+                return []
+
+            logger.debug(f"SubgoalPlanner generated {len(subgoal_list)} subgoals.")
             return subgoal_list
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from SubgoalPlanner output: {e}\nOutput was:\n{llm_output}")
+            return []
         except Exception as e:
-            logger.error(f"Failed to parse SubgoalPlanner output: {e}\nOutput was:\n{llm_output}")
+            logger.error(f"An unexpected error occurred while parsing SubgoalPlanner output: {e}\nOutput was:\n{llm_output}")
             return []
 
     def _construct_zip_act_prompt(self, current_observation: str) -> List[Dict[str, str]]:
         """Constructs the prompt for the ZipAct LLM, including few-shot examples."""
         system_message = {
             "role": "system",
-            "content": """You are a smart and efficient agent. Your goal is to complete the task described in the subgoals. Based on the state, subgoals, and observation, decide your next action. First, provide a brief thought process, then specify the exact action.
+            "content": """You are a smart and efficient agent. Your goal is to complete the task described in the subgoals. Based on the state, subgoals, and observation, decide your next action.
 
-OUTPUT FORMAT:
-THINK: [Your brief reasoning for the action.]
-ACTION: [The single, specific action to execute next.]"""
+You MUST respond with a JSON object of the format: {"thought": "your brief reasoning for the action", "action": "the single, specific action to execute next"}"""
         }
         
         messages = [system_message]
@@ -254,6 +258,11 @@ Subgoals:
 Latest Observation:
 {example["observation"]} """
             messages.append({"role": "user", "content": user_prompt})
+            
+            # The expected output should already be a JSON string in the ICL file, but if not, this would be the place to format it.
+            # Assuming expected_output is a dict: e.g., {"thought": "...", "action": "..."}
+            # assistant_response = json.dumps(example["expected_output"])
+            # However, the current ICL format seems to have the JSON string directly.
             messages.append({"role": "assistant", "content": example["expected_output"]})
 
         formatted_state = "\n".join(f"- {s}" for s in self.state_list) if self.state_list else "None"
@@ -271,115 +280,116 @@ Latest Observation:
         return messages
 
     def _parse_zip_act_response(self, llm_output: str) -> Tuple[str, str]:
-        """Parses the ZipAct LLM's output into think and action."""
+        """Parses the ZipAct LLM's JSON output into think and action."""
         try:
-            think_match = re.search(r"THINK:(.*?)ACTION:", llm_output, re.DOTALL)
-            action_match = re.search(r"ACTION:(.*)", llm_output, re.DOTALL)
-
-            think = think_match.group(1).strip() if think_match else ""
-            action = action_match.group(1).strip() if action_match else llm_output
+            data = json.loads(llm_output)
+            think = data.get("thought", "")
+            action = data.get("action", "")
 
             if not action:
-                logger.warning("Could not parse ACTION from ZipAct output. Using entire output as action.")
-                action = llm_output.strip()
+                logger.warning("ZipAct JSON output is missing 'action'. Using fallback.")
+                return think, "look" # Fallback action
 
             return think, action
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from ZipAct output: {e}\nOutput was:\n{llm_output}")
+            return "", "look" # Fallback action
         except Exception as e:
-            logger.error(f"Failed to parse ZipAct output: {e}\nOutput was:\n{llm_output}")
-            return "", llm_output.strip()
+            logger.error(f"An unexpected error occurred while parsing ZipAct output: {e}\nOutput was:\n{llm_output}")
+            return "", "look" # Fallback action
 
-    def __call__(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Executes the ZipAct + StateUpdater loop."""
-        logger.info(f"{Fore.YELLOW}--- Turn Start ---{Fore.RESET}")
-        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        
+    def __call__(self, messages: List[Dict[str, str]], turn_num: int) -> Dict[str, Any]:
+        """Executes the ZipAct agent's logic for a single turn with structured logging."""
         current_observation = messages[-1]['content']
         
+        # Usage tracking for the turn
+        planner_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        updater_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        zip_act_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
         if self.is_first_turn:
-            logger.info("First turn: Initializing memory from task description.")
-            # Extract clean task description
             goal_description_raw = current_observation.split("Your task is to:")[-1].strip()
             goal_description = goal_description_raw.split("This workflow may be helpful")[0].strip()
 
-            # Use SubgoalPlanner LLM to decompose task into subgoals
-            logger.info(f"{Fore.GREEN}--- Running SubgoalPlanner Phase ---{Fore.RESET}")
             try:
-                subgoal_planner_prompt = self._construct_subgoal_planner_prompt(goal_description)
+                # --- SubgoalPlanner Phase ---
+                prompt_messages = self._construct_subgoal_planner_prompt(goal_description)
+                prompt_text_for_log = "\n".join([f"<{msg['role']}>\n{msg['content']}" for msg in prompt_messages])
                 
-                subgoal_plan_str, usage = self._call_llm(
-                    self.state_updater_client,  # Reuse state_updater client for planning
-                    self.state_updater_model_name,
-                    subgoal_planner_prompt
+                logger.info(f"\n{Fore.GREEN}----------------- [SUBGOAL PLANNER] ------------------{Fore.RESET}")
+                logger.info(f"{Fore.YELLOW}[INPUT]{Fore.RESET}\n{prompt_text_for_log}")
+
+                subgoal_plan_str, usage = self._call_llm_json(
+                    self.state_updater_client, self.state_updater_model_name, prompt_messages
                 )
-                logger.debug(f"SubgoalPlanner RAW OUTPUT:\n{subgoal_plan_str}")
+                
+                logger.info(f"{Fore.YELLOW}[OUTPUT]{Fore.RESET}\n{subgoal_plan_str}")
                 
                 self.subgoal_list = self._parse_subgoal_planner_response(subgoal_plan_str)
-                
-                # Fallback if parsing failed or returned empty list
                 if not self.subgoal_list:
-                    logger.warning("SubgoalPlanner returned empty subgoals. Using fallback.")
                     self.subgoal_list.append(f"Complete the task: {goal_description}")
                 
-                total_usage["prompt_tokens"] += usage.prompt_tokens
-                total_usage["completion_tokens"] += usage.completion_tokens
-                total_usage["total_tokens"] += usage.total_tokens
-                logger.info(f"{Fore.GREEN}[AGENT] SubgoalPlanner | Prompt: {usage.prompt_tokens:<4}, Completion: {usage.completion_tokens:<4}, Total: {usage.total_tokens:<4}{Fore.RESET}")
-                
-            except Exception as e:
-                logger.error(f"SubgoalPlanner LLM call failed: {e}. Using fallback subgoal.")
-                self.subgoal_list.append(f"Complete the task: {goal_description}")
+                planner_usage = usage.__dict__
+            except (openai.APIError, openai.Timeout, openai.RateLimitError) as e:
+                logger.error(f"SubgoalPlanner failed due to an API/network issue: {e}. This may be retried by 'backoff'.")
+                raise e # Re-raise to allow backoff to handle it, or to terminate the turn.
+            except (KeyError, ValueError, TypeError) as e:
+                logger.error(f"FATAL: SubgoalPlanner failed due to a code or data error: {e}. Check agent code and ICL examples.")
+                raise e # Re-raise to terminate the entire run.
             
-            # Initialize state with task description
             self.state_list.append(f"Task: {goal_description}")
         else:
-            logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---{Fore.RESET}")
             try:
+                # --- StateUpdater Phase ---
                 last_action = messages[-2]['content']
-                logger.debug(f"StateUpdater INPUT - Last Action: {last_action}")
-                logger.debug(f"StateUpdater INPUT - New Observation: {current_observation}")
+                prompt_messages = self._construct_state_updater_prompt(last_action, current_observation)
+                prompt_text_for_log = "\n".join([f"<{msg['role']}>\n{msg['content']}" for msg in prompt_messages])
 
-                state_updater_prompt = self._construct_state_updater_prompt(last_action, current_observation)
+                logger.info(f"\n{Fore.MAGENTA}------------------ [STATE UPDATER] -------------------{Fore.RESET}")
+                logger.info(f"{Fore.YELLOW}[INPUT]{Fore.RESET}\n{prompt_text_for_log}")
+
+                new_memory_str, usage = self._call_llm_json(self.state_updater_client, self.state_updater_model_name, prompt_messages)
                 
-                new_memory_str, usage = self._call_llm(self.state_updater_client, self.state_updater_model_name, state_updater_prompt)
-                logger.debug(f"StateUpdater RAW OUTPUT:\n{new_memory_str}")
-                
+                logger.info(f"{Fore.YELLOW}[OUTPUT]{Fore.RESET}\n{new_memory_str}")
+
                 self.state_list, self.subgoal_list = self._parse_new_memory(new_memory_str)
-                
-                total_usage["prompt_tokens"] += usage.prompt_tokens
-                total_usage["completion_tokens"] += usage.completion_tokens
-                total_usage["total_tokens"] += usage.total_tokens
-                logger.info(f"{Fore.MAGENTA}[AGENT] StateUpdater   | Prompt: {usage.prompt_tokens:<4}, Completion: {usage.completion_tokens:<4}, Total: {usage.total_tokens:<4}{Fore.RESET}")
+                updater_usage = usage.__dict__
+            except (openai.APIError, openai.Timeout, openai.RateLimitError) as e:
+                logger.error(f"StateUpdater failed due to an API/network issue: {e}. This may be retried by 'backoff'.")
+                raise e
+            except (KeyError, ValueError, TypeError) as e:
+                logger.error(f"FATAL: StateUpdater failed due to a code or data error: {e}. Check agent code and ICL examples.")
+                raise e
 
-            except (IndexError, KeyError) as e:
-                logger.error(f"Could not extract context for StateUpdater (is history correct?): {e}")
-            except Exception as e:
-                logger.error(f"StateUpdater LLM call failed. Details logged in _call_llm.")
-
-        logger.info(f"{Fore.CYAN}--- Running ZipAct (Decision) Phase ---{Fore.RESET}")
-        logger.debug(f"ZipAct INPUT - State: {self.state_list}")
-        logger.debug(f"ZipAct INPUT - Subgoals: {self.subgoal_list}")
-        logger.debug(f"ZipAct INPUT - Observation: {current_observation}")
-
-        zip_act_prompt = self._construct_zip_act_prompt(current_observation)
-        
-        action = "Action: look" # FIX: Correctly formatted fallback action
+        # --- ZipAct (Decision) Phase ---
+        action = "Action: look"  # Fallback action
         try:
-            zip_act_response, usage = self._call_llm(self.zip_act_client, self.zip_act_model_name, zip_act_prompt)
-            logger.debug(f"ZipAct RAW OUTPUT:\n{zip_act_response}")
+            prompt_messages = self._construct_zip_act_prompt(current_observation)
+            prompt_text_for_log = "\n".join([f"<{msg['role']}>\n{msg['content']}" for msg in prompt_messages])
+            
+            logger.info(f"\n{Fore.CYAN}---------------------- [ZIP ACT] -----------------------{Fore.RESET}")
+            logger.info(f"{Fore.YELLOW}[INPUT]{Fore.RESET}\n{prompt_text_for_log}")
+
+            zip_act_response, usage = self._call_llm_json(self.zip_act_client, self.zip_act_model_name, prompt_messages)
+
+            logger.info(f"{Fore.YELLOW}[OUTPUT]{Fore.RESET}\n{zip_act_response}")
             
             think, parsed_action = self._parse_zip_act_response(zip_act_response)
-            action = f"Action: {parsed_action}" # Ensure the action is always formatted correctly
-            logger.info(f"{Fore.GREEN}ZipAct THINK: {think}{Fore.RESET}")
-            
-            total_usage["prompt_tokens"] += usage.prompt_tokens
-            total_usage["completion_tokens"] += usage.completion_tokens
-            total_usage["total_tokens"] += usage.total_tokens
-            logger.info(f"{Fore.CYAN}[AGENT] ZipAct         | Prompt: {usage.prompt_tokens:<4}, Completion: {usage.completion_tokens:<4}, Total: {usage.total_tokens:<4}{Fore.RESET}")
-
-        except Exception as e:
-            logger.error(f"ZipAct LLM call failed. Details logged in _call_llm.")
+            action = f"Action: {parsed_action}"
+            zip_act_usage = usage.__dict__
+        except (openai.APIError, openai.Timeout, openai.RateLimitError) as e:
+            logger.error(f"ZipAct failed due to an API/network issue: {e}. This may be retried by 'backoff'.")
+            raise e
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error(f"FATAL: ZipAct failed due to a code or data error: {e}. Check agent code and ICL examples.")
+            raise e
 
         self.is_first_turn = False
         
-        logger.info(f"{Fore.BLUE}==> Final Action: {action}{Fore.RESET}")
+        # The final action is logged in main.py after the full turn summary
+        total_usage = {
+            "planner": planner_usage,
+            "updater": updater_usage,
+            "zip_act": zip_act_usage
+        }
         return {"content": action, "usage": total_usage}

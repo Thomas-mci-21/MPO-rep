@@ -9,6 +9,6 @@
       "slice the apple"
     ],
     "observation": "You are holding an apple.",
-    "expected_output": "THINK: My current subgoal is to slice the apple. I am holding the apple now. To slice it, I need a knife. I should first find a knife, which is usually on a counter or in a drawer.\nACTION: go to counter 1"
+    "expected_output": "{\"thought\": \"My current subgoal is to slice the apple. I am holding the apple now. To slice it, I need a knife. I should first find a knife, which is usually on a counter or in a drawer.\", \"action\": \"go to counter 1\"}"
   }
 ]

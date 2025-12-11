@@ -31,30 +31,51 @@ def interactive_loop(
     # reset the environment and set the prompt
     observation, state = env.reset()
 
-    init_msg = observation
-
-    logger.info(f"\n{Fore.YELLOW}{init_msg}{Fore.RESET}")
+    # The initial goal/task description
+    logger.info(f"\n{Fore.YELLOW}{observation}{Fore.RESET}")
 
     while not state.finished:
+        logger.info(f"\n{Fore.YELLOW}========================= TURN {state.steps} =========================")
+        
+        # Log the current observation from the environment
+        if state.steps > 1:
+             logger.info(f"{Fore.BLUE}[OBSERVATION]{Fore.RESET}\n{observation}")
+
         if args.incorporation_type == "thought"  and task.workflow:
             agent.set_workflow(f"This workflow maybe helpful to complete the task:\n{task.workflow}\n")
         try:
+            # Agent performs its logic for the turn
             if args.incorporation_type == "thought" and task.workflow:
-                response = agent.call_with_workflow(state.history)
+                response = agent.call_with_workflow(state.history) # Note: This path might need similar updates
             else:
-                response = agent(state.history)
+                response = agent(state.history, state.steps)
 
             llm_output = response["content"]
-            usage = response.get("usage")
-            if usage:
-                total_prompt_tokens += usage["prompt_tokens"]
-                total_completion_tokens += usage["completion_tokens"]
-                total_turn_tokens = usage['prompt_tokens'] + usage['completion_tokens']
-                logger.info(f"\n{Fore.GREEN}[MAIN]  Turn Total     | Prompt: {usage['prompt_tokens']:<4}, Completion: {usage['completion_tokens']:<4}, Total: {total_turn_tokens:<4}{Fore.RESET}")
+            usage = response.get("usage", {})
             
-            logger.info(
-                f"\n{Fore.GREEN}{llm_output}{Fore.RESET}\n"
-            )
+            # Log the final action chosen by the agent for this turn
+            logger.info(f"\n{Fore.GREEN}[ACTION] ==> {llm_output.replace('Action: ', '')}{Fore.RESET}")
+
+            # Log the consolidated token usage for the turn
+            if usage:
+                p_usage = usage.get('planner', {})
+                u_usage = usage.get('updater', {})
+                z_usage = usage.get('zip_act', {})
+                
+                total_prompt = p_usage.get('prompt_tokens', 0) + u_usage.get('prompt_tokens', 0) + z_usage.get('prompt_tokens', 0)
+                total_completion = p_usage.get('completion_tokens', 0) + u_usage.get('completion_tokens', 0) + z_usage.get('completion_tokens', 0)
+                
+                total_prompt_tokens += total_prompt
+                total_completion_tokens += total_completion
+
+                token_log = (
+                    f"[TOKENS] Planner: {p_usage.get('total_tokens', 0)}, "
+                    f"StateUpdater: {u_usage.get('total_tokens', 0)}, "
+                    f"ZipAct: {z_usage.get('total_tokens', 0)} | "
+                    f"TOTAL: {total_prompt + total_completion}"
+                )
+                logger.info(f"{Fore.CYAN}{token_log}{Fore.RESET}")
+
         except Exception as e:
             logger.info(f"Agent failed with error: {e}")
             state.success = False
@@ -62,13 +83,11 @@ def interactive_loop(
             state.terminate_reason = "exceeding maximum input length"
             break
 
-        # environment step
+        # Log the end of the turn
+        logger.info(f"{Fore.YELLOW}========================================================={Fore.RESET}")
+
+        # Environment steps forward with the agent's action
         observation, state = env.step(llm_output)
-        if not state.finished:
-            # color the observation in blue
-            logger.info(
-                f"\n{Fore.BLUE}{observation}{Fore.RESET}\n"
-            )
 
         if state.finished:
             break
