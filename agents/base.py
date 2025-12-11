@@ -1,6 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, overload
+
 
 logger = logging.getLogger("agent_eval")
 
@@ -15,7 +16,7 @@ class BaseAgent(ABC):
         self.stop_words = ["\nObservation:", "\nTask:", "\n---"]
 
     @abstractmethod
-    def __call__(self) -> str:
+    def __call__(self, messages: List[Dict[str, str]], turn_num: int = 0) -> Dict[str, Any]:
         pass
 
     def add_system_message(

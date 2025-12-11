@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Any, Dict, List
 
 import backoff
 import openai
@@ -29,7 +30,7 @@ class OpenAIAgent(BaseAgent):
             openai.APIConnectionError,
         ),
     )
-    def __call__(self, messages) -> str:
+    def __call__(self, messages: List[Dict[str, str]], turn_num: int = 0) -> Dict[str, Any]:
         # Prepend the prompt with the system message
         response = self.client.chat.completions.create(
             model=self.config["model_name"],
