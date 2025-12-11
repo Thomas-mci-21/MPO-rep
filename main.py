@@ -51,36 +51,58 @@ def interactive_loop(
                 response = agent(state.history, state.steps)
 
             llm_output = response["content"]
-            usage = response.get("usage", {})
-            
+            usage = response.get("usage")
+
             # Log the final action chosen by the agent for this turn
             logger.info(f"\n{Fore.GREEN}[ACTION] ==> {llm_output.replace('Action: ', '')}{Fore.RESET}")
 
             # Log the consolidated token usage for the turn
             if usage:
-                p_usage = usage.get('planner', {})
-                u_usage = usage.get('updater', {})
-                z_usage = usage.get('zip_act', {})
-                
-                total_prompt = p_usage.get('prompt_tokens', 0) + u_usage.get('prompt_tokens', 0) + z_usage.get('prompt_tokens', 0)
-                total_completion = p_usage.get('completion_tokens', 0) + u_usage.get('completion_tokens', 0) + z_usage.get('completion_tokens', 0)
-                
-                total_prompt_tokens += total_prompt
-                total_completion_tokens += total_completion
+                # Case 1: Detailed, nested usage dictionary from a multi-phase agent like ZipActAgent
+                if isinstance(usage, dict) and ('planner' in usage or 'updater' in usage or 'zip_act' in usage):
+                    p_usage = usage.get('planner', {})
+                    u_usage = usage.get('updater', {})
+                    z_usage = usage.get('zip_act', {})
+                    
+                    total_prompt = p_usage.get('prompt_tokens', 0) + u_usage.get('prompt_tokens', 0) + z_usage.get('prompt_tokens', 0)
+                    total_completion = p_usage.get('completion_tokens', 0) + u_usage.get('completion_tokens', 0) + z_usage.get('completion_tokens', 0)
+                    
+                    token_log = (
+                        f"[TOKENS] Planner: {p_usage.get('total_tokens', 0)}, "
+                        f"StateUpdater: {u_usage.get('total_tokens', 0)}, "
+                        f"ZipAct: {z_usage.get('total_tokens', 0)} | "
+                        f"TOTAL: {total_prompt + total_completion}"
+                    )
+                    logger.info(f"{Fore.CYAN}{token_log}{Fore.RESET}")
 
-                token_log = (
-                    f"[TOKENS] Planner: {p_usage.get('total_tokens', 0)}, "
-                    f"StateUpdater: {u_usage.get('total_tokens', 0)}, "
-                    f"ZipAct: {z_usage.get('total_tokens', 0)} | "
-                    f"TOTAL: {total_prompt + total_completion}"
-                )
-                logger.info(f"{Fore.CYAN}{token_log}{Fore.RESET}")
+                    total_prompt_tokens += total_prompt
+                    total_completion_tokens += total_completion
 
+                # Case 2: Simple usage object from a single-call agent like OpenAIAgent
+                else:
+                    try:
+                        prompt_t = usage.prompt_tokens
+                        completion_t = usage.completion_tokens
+                        
+                        total_prompt_tokens += prompt_t
+                        total_completion_tokens += completion_t
+
+                        token_log = (
+                            f"[TOKENS] Prompt: {prompt_t}, "
+                            f"Completion: {completion_t} | "
+                            f"TOTAL: {prompt_t + completion_t}"
+                        )
+                        logger.info(f"{Fore.CYAN}{token_log}{Fore.RESET}")
+                    except AttributeError:
+                        logger.warning("Could not parse token usage from agent's response. 'usage' object might be malformed.")
+            
         except Exception as e:
             logger.info(f"Agent failed with error: {e}")
+            import traceback
+            traceback.print_exc()
             state.success = False
             state.finished = True
-            state.terminate_reason = "exceeding maximum input length"
+            state.terminate_reason = "agent_error"
             break
 
         # Log the end of the turn
