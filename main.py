@@ -49,7 +49,8 @@ def interactive_loop(
             if usage:
                 total_prompt_tokens += usage["prompt_tokens"]
                 total_completion_tokens += usage["completion_tokens"]
-                logger.info(f"\n{Fore.CYAN}Tokens this turn: Prompt={usage['prompt_tokens']}, Completion={usage['completion_tokens']}{Fore.RESET}")
+                total_turn_tokens = usage['prompt_tokens'] + usage['completion_tokens']
+                logger.info(f"\n{Fore.GREEN}[MAIN]  Turn Total     | Prompt: {usage['prompt_tokens']:<4}, Completion: {usage['completion_tokens']:<4}, Total: {total_turn_tokens:<4}{Fore.RESET}")
             
             logger.info(
                 f"\n{Fore.GREEN}{llm_output}{Fore.RESET}\n"

@@ -1,0 +1,11 @@
+[
+  {
+    "description": "Demonstrates how to decompose a task into actionable subgoals.",
+    "task": "heat some mug and put it in cabinet.",
+    "expected_subgoals": [
+      "Find and take mug.",
+      "Heat mug.",
+      "Put mug in cabinet."
+    ]
+  }
+]

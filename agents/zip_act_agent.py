@@ -61,6 +61,11 @@ class ZipActAgent(BaseAgent):
             with open(config["state_updater_icl_path"], 'r') as f:
                 self.state_updater_examples = json.load(f)
 
+        self.subgoal_planner_examples = []
+        if config.get("subgoal_planner_icl_path"):
+            with open(config["subgoal_planner_icl_path"], 'r') as f:
+                self.subgoal_planner_examples = json.load(f)
+
     @backoff.on_exception(
         backoff.fibo,
         (openai.APIError, openai.Timeout, openai.RateLimitError, openai.APIConnectionError),
@@ -179,6 +184,52 @@ TASK: Based on the context, provide the updated memory."""
             logger.error(f"Failed to parse StateUpdater output: {e}\nOutput was:\n{llm_output}")
             return self.state_list, self.subgoal_list
 
+    def _construct_subgoal_planner_prompt(self, task_description: str) -> List[Dict[str, str]]:
+        """Constructs the prompt for the SubgoalPlanner LLM to decompose the task into subgoals."""
+        system_message = {
+            "role": "system",
+            "content": """You are a task planning assistant. Given a high-level task description, decompose it into a sequence of actionable subgoals.
+
+RULES:
+1. Each subgoal should be clear, specific, and executable.
+2. Subgoals should be ordered logically to accomplish the task.
+3. Keep subgoals concise (one action per subgoal).
+
+OUTPUT FORMAT:
+<Subgoals>
+- [Subgoal 1]
+- [Subgoal 2]
+...
+</Subgoals>"""
+        }
+        
+        messages = [system_message]
+        for example in self.subgoal_planner_examples:
+            user_prompt = f"Task: {example['task']}"
+            messages.append({"role": "user", "content": user_prompt})
+            
+            subgoals_str = "\n".join(f"- {sg}" for sg in example["expected_subgoals"])
+            assistant_response = f"<Subgoals>\n{subgoals_str}\n</Subgoals>"
+            messages.append({"role": "assistant", "content": assistant_response})
+
+        final_user_prompt = f"Task: {task_description}"
+        messages.append({"role": "user", "content": final_user_prompt})
+        
+        return messages
+
+    def _parse_subgoal_planner_response(self, llm_output: str) -> List[str]:
+        """Parses the SubgoalPlanner LLM's output into a list of subgoals."""
+        try:
+            subgoal_match = re.search(r"<Subgoals>(.*?)</Subgoals>", llm_output, re.DOTALL)
+            subgoals_str = subgoal_match.group(1).strip() if subgoal_match else ""
+            subgoal_list = [line.strip().lstrip('- ') for line in subgoals_str.split('\n') if line.strip()]
+            
+            logger.info(f"{Fore.GREEN}SubgoalPlanner generated {len(subgoal_list)} subgoals.{Fore.RESET}")
+            return subgoal_list
+        except Exception as e:
+            logger.error(f"Failed to parse SubgoalPlanner output: {e}\nOutput was:\n{llm_output}")
+            return []
+
     def _construct_zip_act_prompt(self, current_observation: str) -> List[Dict[str, str]]:
         """Constructs the prompt for the ZipAct LLM, including few-shot examples."""
         system_message = {
@@ -246,23 +297,40 @@ Latest Observation:
         
         if self.is_first_turn:
             logger.info("First turn: Initializing memory from task description.")
-            # Ensure the initial observation is clean and just the task goal
+            # Extract clean task description
             goal_description_raw = current_observation.split("Your task is to:")[-1].strip()
-            # Remove workflow part if it somehow got included (though env is supposed to prevent it now)
             goal_description = goal_description_raw.split("This workflow may be helpful")[0].strip()
 
-            # Attempt to parse a more structured goal
-            goal_match = re.search(r"heat some (\w+) and put it in (\w+)", goal_description)
-            if goal_match:
-                item_to_heat = goal_match.group(1)
-                location_to_put = goal_match.group(2)
-                self.subgoal_list.append(f"Find and take {item_to_heat}.")
-                self.subgoal_list.append(f"Heat {item_to_heat}.")
-                self.subgoal_list.append(f"Put {item_to_heat} in {location_to_put}.")
-                self.state_list.append(f"Task: {goal_description}")
-            else:
+            # Use SubgoalPlanner LLM to decompose task into subgoals
+            logger.info(f"{Fore.GREEN}--- Running SubgoalPlanner Phase ---{Fore.RESET}")
+            try:
+                subgoal_planner_prompt = self._construct_subgoal_planner_prompt(goal_description)
+                
+                subgoal_plan_str, usage = self._call_llm(
+                    self.state_updater_client,  # Reuse state_updater client for planning
+                    self.state_updater_model_name,
+                    subgoal_planner_prompt
+                )
+                logger.debug(f"SubgoalPlanner RAW OUTPUT:\n{subgoal_plan_str}")
+                
+                self.subgoal_list = self._parse_subgoal_planner_response(subgoal_plan_str)
+                
+                # Fallback if parsing failed or returned empty list
+                if not self.subgoal_list:
+                    logger.warning("SubgoalPlanner returned empty subgoals. Using fallback.")
+                    self.subgoal_list.append(f"Complete the task: {goal_description}")
+                
+                total_usage["prompt_tokens"] += usage.prompt_tokens
+                total_usage["completion_tokens"] += usage.completion_tokens
+                total_usage["total_tokens"] += usage.total_tokens
+                logger.info(f"{Fore.GREEN}[AGENT] SubgoalPlanner | Prompt: {usage.prompt_tokens:<4}, Completion: {usage.completion_tokens:<4}, Total: {usage.total_tokens:<4}{Fore.RESET}")
+                
+            except Exception as e:
+                logger.error(f"SubgoalPlanner LLM call failed: {e}. Using fallback subgoal.")
                 self.subgoal_list.append(f"Complete the task: {goal_description}")
-            self.state_list.append("The initial state is described by the observation and subgoals.")
+            
+            # Initialize state with task description
+            self.state_list.append(f"Task: {goal_description}")
         else:
             logger.info(f"{Fore.MAGENTA}--- Running StateUpdater Phase ---{Fore.RESET}")
             try:
@@ -280,7 +348,7 @@ Latest Observation:
                 total_usage["prompt_tokens"] += usage.prompt_tokens
                 total_usage["completion_tokens"] += usage.completion_tokens
                 total_usage["total_tokens"] += usage.total_tokens
-                logger.info(f"{Fore.MAGENTA}StateUpdater Tokens: {usage.prompt_tokens} (P) + {usage.completion_tokens} (C) = {usage.total_tokens} (T){Fore.RESET}")
+                logger.info(f"{Fore.MAGENTA}[AGENT] StateUpdater   | Prompt: {usage.prompt_tokens:<4}, Completion: {usage.completion_tokens:<4}, Total: {usage.total_tokens:<4}{Fore.RESET}")
 
             except (IndexError, KeyError) as e:
                 logger.error(f"Could not extract context for StateUpdater (is history correct?): {e}")
@@ -306,7 +374,7 @@ Latest Observation:
             total_usage["prompt_tokens"] += usage.prompt_tokens
             total_usage["completion_tokens"] += usage.completion_tokens
             total_usage["total_tokens"] += usage.total_tokens
-            logger.info(f"{Fore.CYAN}ZipAct Tokens: {usage.prompt_tokens} (P) + {usage.completion_tokens} (C) = {usage.total_tokens} (T){Fore.RESET}")
+            logger.info(f"{Fore.CYAN}[AGENT] ZipAct         | Prompt: {usage.prompt_tokens:<4}, Completion: {usage.completion_tokens:<4}, Total: {usage.total_tokens:<4}{Fore.RESET}")
 
         except Exception as e:
             logger.error(f"ZipAct LLM call failed. Details logged in _call_llm.")
